@@ -47,10 +47,21 @@ export default {
         seriesOptions: {
             type: Object,
         },
+        series: {
+            type: Array,
+            default: () => [],
+        },
     },
     mounted() {
         this.chart = createChart(this.$refs.chartContainer, this.chartOptions);
-        this.addSeriesAndData(this.type, this.seriesOptions, this.data);
+        if (this.series && this.series.length > 0) {
+            this.seriesInstances = [];
+            this.series.forEach((s) => {
+                this.addSeriesInstance(s);
+            });
+        } else {
+            this.addSeriesAndData(this.type, this.seriesOptions, this.data);
+        }
         this.resizeHandler(this.$refs.chartContainer);
         this.chart.timeScale().fitContent();
         if (this.autosize) {
@@ -65,38 +76,62 @@ export default {
             this.chart.remove();
             this.chart = null;
         }
-        if (this.series) {
-            this.series = null;
+        if (this.seriesInstance) {
+            this.seriesInstance = null;
         }
         if (this.resizeListener) {
             window.removeEventListener('resize', this.resizeListener);
         }
     },
     watch: {
+        series: {
+            handler(newSeries) {
+                if (this.seriesInstances) {
+                    this.seriesInstances.forEach((s) => this.chart.removeSeries(s));
+                    this.seriesInstances = [];
+                }
+                if (newSeries && newSeries.length > 0) {
+                    newSeries.forEach((s) => this.addSeriesInstance(s));
+                }
+            },
+            deep: true,
+        },
         type() {
-            if (this.series && this.chart) {
-                this.chart.removeSeries(this.series);
+            if (this.series && this.series.length > 0) return;
+            if (this.seriesInstance && this.chart) {
+                this.chart.removeSeries(this.seriesInstance);
             }
             this.addSeriesAndData(this.type, this.seriesOptions, this.data);
         },
         data(newData) {
-            if (!this.series) return;
-            this.series.setData(newData);
+            if (this.series && this.series.length > 0) return;
+            if (!this.seriesInstance) return;
+            this.seriesInstance.setData(newData);
         },
         chartOptions(newOptions) {
             if (!this.chart) return;
             this.chart.applyOptions(newOptions);
         },
         seriesOptions(newOptions) {
-            if (!this.series) return;
-            this.series.applyOptions(newOptions);
+            if (this.series && this.series.length > 0) return;
+            if (!this.seriesInstance) return;
+            this.seriesInstance.applyOptions(newOptions);
         },
     },
     methods: {
+        addSeriesInstance(seriesConfig) {
+            const { type, data, options } = seriesConfig;
+            const seriesDefinition = getChartSeriesDefinition(type);
+            const series = this.chart.addSeries(seriesDefinition, options);
+            series.setData(data);
+            if (!this.seriesInstances) this.seriesInstances = [];
+            this.seriesInstances.push(series);
+            return series;
+        },
         addSeriesAndData(type, seriesOptions, data) {
             const seriesDefinition = getChartSeriesDefinition(type);
-            this.series = this.chart.addSeries(seriesDefinition, seriesOptions);
-            this.series.setData(data);
+            this.seriesInstance = this.chart.addSeries(seriesDefinition, seriesOptions);
+            this.seriesInstance.setData(data);
         },
         resizeHandler(container) {
             if (!this.chart || !container) return;

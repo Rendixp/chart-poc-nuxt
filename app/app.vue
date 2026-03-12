@@ -1,3 +1,4 @@
 <template>
-    <PriceChart />
+     <PriceChart />
+    <CandlestickChart />
 </template>
