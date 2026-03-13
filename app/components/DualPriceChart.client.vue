@@ -375,6 +375,9 @@ body {
     margin: 0;
     background: #0f0f0f;
 }
+#tv-attr-logo {
+    display: none !important;
+}
 </style>
 <style scoped>
 .page {
