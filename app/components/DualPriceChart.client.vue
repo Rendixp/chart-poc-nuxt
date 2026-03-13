@@ -10,9 +10,7 @@ const props = defineProps({
     },
 });
 
-const chartRef1 = ref(null);
-const chartRef2 = ref(null);
-const singleChartRef = ref(null);
+const chartRefs = ref([]);
 
 const chartOptions = {
     layout: {
@@ -22,6 +20,7 @@ const chartOptions = {
     },
     rightPriceScale: {
         borderColor: '#2a2a2a',
+        minimumWidth: 90, // Set global minimum width for alignment
     },
     timeScale: {
         borderColor: '#2a2a2a',
@@ -42,23 +41,6 @@ const defaultData = data_5m.map((point) => ({
     time: Math.floor(new Date(point.x.replace(' ', 'T') + 'Z').getTime() / 1000),
     value: point.y,
 }));
-
-const defaultSeriesOptions = {
-    lineColor: '#ff8a2b',
-    topColor: 'rgba(255, 138, 43, 0.25)',
-    bottomColor: 'rgba(255, 138, 43, 0)',
-    lineWidth: 2,
-    priceLineVisible: false,
-    lastValueVisible: false,
-};
-
-const defaultSeries = [
-    {
-        type: 'area',
-        data: defaultData,
-        options: defaultSeriesOptions,
-    },
-];
 
 const palette = [
     { line: '#ff8a2b', top: 'rgba(255, 138, 43, 0.25)', bottom: 'rgba(255, 138, 43, 0)' },
@@ -149,162 +131,178 @@ const getPriceFormat = (dataset) => {
     return { precision, minMove };
 };
 
-const isDualChart = computed(() => {
-    // If we have at least 2 datasets, check their range difference
-    if (normalizedDatasets.value.length >= 2) {
-        const d1 = normalizedDatasets.value[0];
-        const d2 = normalizedDatasets.value[1];
-        
-        if (d1.length === 0 || d2.length === 0) return false;
-        
-        const max1 = Math.max(...d1.map(p => p.value));
-        const max2 = Math.max(...d2.map(p => p.value));
-        
-        // Avoid division by zero
-        if (max1 === 0 || max2 === 0) return false;
-        
-        // Calculate magnitude difference based on max values
-        const ratio = Math.max(max1, max2) / Math.min(max1, max2);
-        
-        // If one is > 5x larger than the other, use dual chart
-        return ratio > 5;
-    }
-    return false;
+// Group datasets based on value proximity (5x rule)
+const groupedDatasets = computed(() => {
+    const datasets = alignedDatasets.value.slice(0, 5);
+    if (datasets.length === 0) return [];
+
+    // Calculate max value for each dataset
+    const withMax = datasets.map((data, originalIndex) => {
+        const max = data.length > 0 ? Math.max(...data.map(p => p.value)) : 0;
+        return { data, max, originalIndex };
+    });
+
+    const sorted = [...withMax].sort((a, b) => b.max - a.max);
+
+    const groups = [];
+    
+    sorted.forEach(item => {
+        let added = false;
+
+        for (const group of groups) {
+            const groupMax = group[0].max;
+            const ratio = Math.max(groupMax, item.max) / Math.min(groupMax, item.max);
+            
+            if (ratio <= 5) {
+                group.push(item);
+                added = true;
+                break;
+            }
+        }
+        if (!added) {
+            groups.push([item]);
+        }
+    });
+
+    groups.sort((g1, g2) => {
+        const max1 = Math.max(...g1.map(i => i.max));
+        const max2 = Math.max(...g2.map(i => i.max));
+        return max2 - max1; // Descending: High -> Low
+    });
+
+    return groups;
+});
+
+const isStackedChart = computed(() => {
+    return groupedDatasets.value && groupedDatasets.value.length > 1;
+});
+
+const stackedSeries = computed(() => {
+    if (!groupedDatasets.value || groupedDatasets.value.length === 0) return [];
+    
+    return groupedDatasets.value.map(group => {
+        return group.map(item => {
+            const colors = palette[item.originalIndex % palette.length];
+            return {
+                type: 'area',
+                data: item.data,
+                options: {
+                    lineColor: colors.line,
+                    topColor: colors.top,
+                    bottomColor: colors.bottom,
+                    lineWidth: 2,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    priceFormat: getPriceFormat(item.data),
+                },
+            };
+        });
+    });
 });
 
 const finalSeries = computed(() => {
-    return alignedDatasets.value.slice(0, 5).map((data, index) => {
-        const colors = palette[index % palette.length];
-        return {
-            type: 'area',
-            data: data,
-            options: {
-                lineColor: colors.line,
-                topColor: colors.top,
-                bottomColor: colors.bottom,
-                lineWidth: 2,
-                priceLineVisible: false,
-                lastValueVisible: false,
-                priceFormat: getPriceFormat(data),
-            },
-        };
-    });
+    if (!isStackedChart.value && stackedSeries.value.length > 0) {
+        return stackedSeries.value[0];
+    }
+    return [];
 });
 
-const series1 = computed(() => [finalSeries.value[0]]);
-const series2 = computed(() => [finalSeries.value[1]]);
 
-// Synchronization Logic
-let isSyncingLeft = false;
-let isSyncingRight = false;
+let isSyncingCrosshair = false;
 let isSyncingRange = false;
 
-const getSeriesDataPoint = (seriesIndex, time) => {
-    const dataset = alignedDatasets.value[seriesIndex];
-    if (!dataset) return null;
-    // Assuming data is sorted by time, we can find it.
-    // For performance, maybe use binary search or map, but finding is okay for now.
-    return dataset.find(d => d.time === time);
+const getSeriesDataPoint = (groupIndex, seriesIndexInGroup, time) => {
+    const group = groupedDatasets.value[groupIndex];
+    if (!group) return null;
+    const item = group[seriesIndexInGroup];
+    if (!item) return null;
+    return item.data.find(d => d.time === time);
 };
 
 const syncCharts = () => {
-    if (!chartRef1.value || !chartRef2.value) return;
+    if (!chartRefs.value || chartRefs.value.length === 0) return;
     
-    const chart1 = chartRef1.value.chart;
-    const chart2 = chartRef2.value.chart;
+    const validRefs = chartRefs.value.filter(r => r && r.chart);
+    if (validRefs.length < 2) return;
+
+    const alignedWidth = 90; 
     
-    // Access series instances. BaseChart exposes seriesInstances (array) or seriesInstance (single)
-    // We are passing 'series' prop which is an array, so BaseChart will use 'seriesInstances'.
-    const series1Instances = chartRef1.value.seriesInstances;
-    const series2Instances = chartRef2.value.seriesInstances;
-
-    if (!chart1 || !chart2 || !series1Instances || !series2Instances) return;
-    
-    // We assume each chart has 1 series in dual mode (since we split them)
-    const series1 = series1Instances[0];
-    const series2 = series2Instances[0];
-
-    if (!series1 || !series2) return;
-
-    // Sync Crosshair
-    chart1.subscribeCrosshairMove((param) => {
-        if (isSyncingRight) return;
-        isSyncingLeft = true;
-        
-        if (param.time) {
-            // Re-fetch current series instance inside callback to handle updates
-            const currentSeries2 = chartRef2.value?.seriesInstances?.[0];
-            if (currentSeries2) {
-                const dataPoint = getSeriesDataPoint(1, param.time); // Get data for chart 2 (index 1)
-                if (dataPoint) {
-                    chart2.setCrosshairPosition(dataPoint.value, param.time, currentSeries2);
-                } else {
-                    chart2.clearCrosshairPosition();
-                }
+    validRefs.forEach(ref => {
+        ref.chart.applyOptions({
+            rightPriceScale: {
+                minimumWidth: alignedWidth,
             }
-        } else {
-             chart2.clearCrosshairPosition();
-        }
-        isSyncingLeft = false;
+        });
     });
 
-    chart2.subscribeCrosshairMove((param) => {
-        if (isSyncingLeft) return;
-        isSyncingRight = true;
-        
-        if (param.time) {
-            // Re-fetch current series instance inside callback
-            const currentSeries1 = chartRef1.value?.seriesInstances?.[0];
-            if (currentSeries1) {
-                const dataPoint = getSeriesDataPoint(0, param.time); // Get data for chart 1 (index 0)
-                if (dataPoint) {
-                    chart1.setCrosshairPosition(dataPoint.value, param.time, currentSeries1);
-                } else {
-                    chart1.clearCrosshairPosition();
+    validRefs.forEach((ref, groupIndex) => {
+        const chart = ref.chart;
+        const seriesInstances = ref.seriesInstances;
+        if (!seriesInstances || seriesInstances.length === 0) return;
+
+        // Sync Crosshair
+        chart.subscribeCrosshairMove((param) => {
+            if (isSyncingCrosshair) return;
+            isSyncingCrosshair = true;
+            
+            validRefs.forEach((targetRef, targetGroupIndex) => {
+                if (groupIndex === targetGroupIndex) return;
+                
+                const targetChart = targetRef.chart;
+                const targetSeriesInstances = targetRef.seriesInstances;
+                
+                if (targetChart && targetSeriesInstances && targetSeriesInstances.length > 0) {
+
+                    const targetSeries = targetSeriesInstances[0];                    
+                     if (param.time) {
+                        const dataPoint = getSeriesDataPoint(targetGroupIndex, 0, param.time);
+                        if (dataPoint) {
+                            targetChart.setCrosshairPosition(dataPoint.value, param.time, targetSeries);
+                        } else {
+                            targetChart.clearCrosshairPosition();
+                        }
+                    } else {
+                        targetChart.clearCrosshairPosition();
+                    }
                 }
-            }
-        } else {
-            chart1.clearCrosshairPosition();
-        }
-        isSyncingRight = false;
-    });
+            });
+            
+            isSyncingCrosshair = false;
+        });
 
-    // Sync Time Scale (Zoom/Pan)
-    chart1.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-        if (isSyncingRange) return;
-        isSyncingRange = true;
-        chart2.timeScale().setVisibleLogicalRange(range);
-        isSyncingRange = false;
-    });
-
-    chart2.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-        if (isSyncingRange) return;
-        isSyncingRange = true;
-        chart1.timeScale().setVisibleLogicalRange(range);
-        isSyncingRange = false;
+        // Sync Time Scale
+        chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+            if (isSyncingRange) return;
+            isSyncingRange = true;
+            
+            validRefs.forEach((targetRef, targetGroupIndex) => {
+                if (groupIndex === targetGroupIndex) return;
+                const targetChart = targetRef.chart;
+                if (targetChart) {
+                    targetChart.timeScale().setVisibleLogicalRange(range);
+                }
+            });
+            
+            isSyncingRange = false;
+        });
     });
 };
 
-watch(() => isDualChart.value, (newVal) => {
-    if (newVal) {
-        nextTick(() => {
-            syncCharts();
-        });
-    }
+watch(() => isStackedChart.value, () => {
+    nextTick(() => {
+        syncCharts();
+    });
 });
 
 onMounted(() => {
-    if (isDualChart.value) {
-        nextTick(() => {
-            syncCharts();
-        });
-    }
+    nextTick(() => {
+        syncCharts();
+    });
 });
 
 const formattedPrice = computed(() => {
     if (alignedDatasets.value.length >= 1) {
-        // Just show the first dataset's last price for simplicity, or "Dual View"
-        if (isDualChart.value) return 'Dual View';
+        if (isStackedChart.value) return `${alignedDatasets.value.length} Datasets (Stacked)`;
         
         const seriesData = alignedDatasets.value[0];
         const lastPoint = seriesData[seriesData.length - 1];
@@ -322,6 +320,17 @@ const formattedPrice = computed(() => {
     return 'No Data';
 });
 
+const getChartOptions = (index, total) => {
+    const isLast = index === total - 1;
+    return {
+        ...chartOptions,
+        timeScale: {
+            ...chartOptions.timeScale,
+            visible: isLast, // Only show for the last chart
+        }
+    };
+};
+
 </script>
 
 <template>
@@ -332,7 +341,7 @@ const formattedPrice = computed(() => {
                 <div class="value">{{ formattedPrice }}</div>
             </div>
             
-            <div class="chart-container" v-if="!isDualChart">
+            <div class="chart-container" v-if="!isStackedChart">
                 <BaseChart
                     ref="singleChartRef"
                     :autosize="true"
@@ -341,21 +350,17 @@ const formattedPrice = computed(() => {
                 />
             </div>
             
-            <div class="dual-chart-container" v-else>
-                <div class="chart-row">
+            <div class="stacked-chart-container" v-else>
+                <div 
+                    class="chart-row" 
+                    v-for="(series, index) in stackedSeries" 
+                    :key="index"
+                >
                     <BaseChart
-                        ref="chartRef1"
+                        ref="chartRefs"
                         :autosize="true"
-                        :chart-options="chartOptions"
-                        :series="series1"
-                    />
-                </div>
-                <div class="chart-row">
-                    <BaseChart
-                        ref="chartRef2"
-                        :autosize="true"
-                        :chart-options="chartOptions"
-                        :series="series2"
+                        :chart-options="getChartOptions(index, stackedSeries.length)"
+                        :series="series"
                     />
                 </div>
             </div>
@@ -408,7 +413,7 @@ body {
     height: 340px;
     width: 100%;
 }
-.dual-chart-container {
+.stacked-chart-container {
     height: 600px;
     width: 100%;
     display: flex;
@@ -418,5 +423,7 @@ body {
 .chart-row {
     flex: 1;
     position: relative;
+    /* Ensure charts don't overflow */
+    min-height: 0; 
 }
 </style>
