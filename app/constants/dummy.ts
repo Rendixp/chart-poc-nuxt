@@ -1568,6 +1568,56 @@ export const btc_1y = [
 }
 ]
 
+export const btc_mood_index_1y = btc_1y.map((item, index) => {
+  const minValue = 1196.24
+  const maxValue = 2864.91
+  const length = btc_1y.length
+  const range = maxValue - minValue
+  let value = minValue
+
+  if (length === 1) {
+    value = minValue
+  } else if (index === 0) {
+    value = minValue
+  } else if (index === length - 1) {
+    value = maxValue
+  } else {
+    const peakIndex = Math.max(1, Math.floor((length - 1) * 0.35))
+    const troughIndex = Math.min(length - 2, Math.max(peakIndex + 1, Math.floor((length - 1) * 0.65)))
+    const peakValue = minValue + range * 0.78
+    const troughValue = minValue + range * 0.38
+
+    const random01 = (i: number) => {
+      const x = (Math.imul(i + 1, 1664525) + 1013904223) >>> 0
+      return x / 4294967296
+    }
+
+    const lerp = (a: number, b: number, t: number) => a + (b - a) * t
+
+    let base = minValue
+
+    if (index <= peakIndex) {
+      base = lerp(minValue, peakValue, index / peakIndex)
+    } else if (index <= troughIndex) {
+      base = lerp(peakValue, troughValue, (index - peakIndex) / (troughIndex - peakIndex))
+    } else {
+      base = lerp(troughValue, maxValue, (index - troughIndex) / ((length - 1) - troughIndex))
+    }
+
+    const noise = (random01(index) - 0.5) * range * 0.06
+    const wiggle =
+      Math.sin(index / 3.2) * range * 0.02 +
+      Math.sin(index / 11.5) * range * 0.012 +
+      Math.sin(index / 29) * range * 0.008
+    value = Math.min(maxValue, Math.max(minValue, base + noise + wiggle))
+  }
+
+  return {
+    "timestamp": item.timestamp,
+    "value": Number(value.toFixed(2))
+  }
+})
+
 export const polypad_1y = [
  {
    "timestamp": "2025-03-13T00:00:00.000Z",
@@ -6172,3 +6222,14 @@ export const hbar_1y = [
       }
 ]
 
+export const hbar_mood_index_1y = hbar_1y.map((item, index) => {
+  const minValue = 155.05
+  const maxValue = 190.69
+  const length = hbar_1y.length
+  const value = length === 1 ? minValue : minValue + (maxValue - minValue) * (index / (length - 1))
+
+  return {
+    "timestamp": item.timestamp,
+    "value": Number(value.toFixed(2))
+  }
+})
