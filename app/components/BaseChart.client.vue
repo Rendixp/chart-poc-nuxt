@@ -120,10 +120,17 @@ export default {
     },
     methods: {
         addSeriesInstance(seriesConfig) {
-            const { type, data, options } = seriesConfig;
+            const { type, data, options, primitives } = seriesConfig;
             const seriesDefinition = getChartSeriesDefinition(type);
             const series = this.chart.addSeries(seriesDefinition, options);
             series.setData(data);
+            if (Array.isArray(primitives) && primitives.length > 0) {
+                primitives.forEach((p) => {
+                    try {
+                        series.attachPrimitive(p);
+                    } catch {}
+                });
+            }
             if (!this.seriesInstances) this.seriesInstances = [];
             this.seriesInstances.push(series);
             return series;
